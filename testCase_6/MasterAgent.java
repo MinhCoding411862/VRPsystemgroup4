@@ -4,516 +4,269 @@ import jade.core.Agent;
 import jade.core.AID;
 import jade.lang.acl.ACLMessage;
 import jade.lang.acl.MessageTemplate;
-import jade.wrapper.AgentController;
-import jade.wrapper.StaleProxyException;
-import jade.core.behaviours.CyclicBehaviour;
-import jade.core.behaviours.OneShotBehaviour;
-import jade.core.behaviours.WakerBehaviour;
-
-import javax.swing.JButton;
-import java.awt.event.ActionListener;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.LinkedList;
-import java.util.Queue;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 public class MasterAgent extends Agent {
     public static DeliveryGUI gui;
-    private Map<String, String> agentPackageMapping = new HashMap<>();
-    private Map<String, PackageInfo> activePackages = new HashMap<>();
-    private Map<String, String> agentStates = new HashMap<>();
-    private Map<String, Integer> packageCounters = new HashMap<>();
-    private Map<String, AgentController> agentControllers = new HashMap<>();
-    private Map<String, Queue<String>> packageQueues = new HashMap<>();
-    private Map<String, Boolean> agentOnRescueMission = new HashMap<>(); // Track rescue missions
-    private Map<String, List<RescueBid>> rescueBids = new HashMap<>(); // ConversationId -> List of bids
-
-    private class PackageInfo {
-        String packageName;
-        String packageType;
-        int deliveryTime;
-        boolean available;
-        boolean inDelivery;
-        String assignedAgent;
-
-        PackageInfo(String packageName, String packageType, int deliveryTime) {
-            this.packageName = packageName;
-            this.packageType = packageType;
-            this.deliveryTime = deliveryTime;
-            this.available = true;
-            this.inDelivery = false;
-            this.assignedAgent = null;
-        }
-    }
-
-    private class RescueBid {
-        String agentName;
-        String strandedAgent;
-        String packageName;
-        int bidTime;
-        String conversationId;
-
-        RescueBid(String agentName, String strandedAgent, String packageName, int bidTime, String conversationId) {
-            this.agentName = agentName;
-            this.strandedAgent = strandedAgent;
-            this.packageName = packageName;
-            this.bidTime = bidTime;
-            this.conversationId = conversationId;
-        }
-    }
+    private Map<String, PackageInfo> availablePackages = new LinkedHashMap<>();
+    private int agentCount = 3;
+    private Set<String> readyAgents = new HashSet<>();
+    private boolean systemPaused = false;
 
     @Override
     protected void setup() {
         gui = new DeliveryGUI();
-        gui.addMessage("MasterAgent is ready.");
+        gui.addMessage("========================================");
+        gui.addMessage("🎯 MASTER AGENT INITIALIZED");
+        gui.addMessage("========================================");
+        gui.addMessage("📋 System Mode: SHARED PACKAGES");
+        gui.addMessage("   → Any agent can pick up any package");
+        gui.addMessage("   → First-come, first-served basis");
+        gui.addMessage("========================================");
+        gui.addMessage("");
 
-        // Initialize package counters and queues
-        for (int i = 1; i <= 3; i++) {
-            packageCounters.put(String.valueOf(i), 1);
-            packageQueues.put(String.valueOf(i), new LinkedList<>());
-            agentOnRescueMission.put("Agent" + i, false);
-        }
+        // Set up pause/resume callbacks
+        gui.setOnPauseCallback(() -> pauseSystem());
+        gui.setOnResumeCallback(() -> resumeSystem());
 
-        // Create 3 Delivery Agents
-        for (int i = 1; i <= 3; i++) {
+        // === Create initial packages with UNIFORM travel times and weights ===
+        createPackage("P1", 3, 8);   // 3s travel time, 8kg
+        createPackage("P2", 5, 7);   // 5s travel time, 7kg
+        createPackage("P3", 2, 5);   // 2s travel time, 5kg
+        createPackage("P4", 4, 6);   // 4s travel time, 6kg
+        createPackage("P5", 3, 4);   // 3s travel time, 4kg
+        createPackage("P6", 6, 9);   // 6s travel time, 9kg
+        createPackage("P7", 2, 3);   // 2s travel time, 3kg
+        createPackage("P8", 4, 7);   // 4s travel time, 7kg
+        createPackage("P9", 5, 6);   // 5s travel time, 6kg
+        createPackage("P10", 3, 5);  // 3s travel time, 5kg
+
+        gui.addMessage("✅ All packages created with uniform travel times");
+        gui.addMessage("");
+
+        // === Create 3 Delivery Agents with 15kg capacity ===
+        for (int i = 1; i <= agentCount; i++) {
             String agentName = "Agent" + i;
-            String packageType = String.valueOf(i);
-
-            gui.addAgent(agentName);
-            agentPackageMapping.put(agentName, packageType);
-            agentStates.put(agentName, "IDLE");
-
-            try {
-                AgentController ac = getContainerController().createNewAgent(
-                        agentName,
-                        "testCase_6.DeliveryAgent",
-                        new Object[]{packageType}
-                );
-                ac.start();
-                agentControllers.put(agentName, ac);
-            } catch (StaleProxyException e) {
-                e.printStackTrace();
-            }
+            gui.addAgent(agentName, 15); // capacity = 15kg
         }
 
-        // Connect GUI buttons after 3 seconds
-        addBehaviour(new WakerBehaviour(this, 3000) {
-            @Override
-            protected void onWake() {
-                connectGUIButtons();
-            }
-        });
-
-        // Initialize first batch of packages
-        for (int i = 1; i <= 3; i++) {
-            String packageType = String.valueOf(i);
-            createNewPackage(packageType);
-        }
-
-        // Listen for distress calls (CFP)
-        addBehaviour(new CyclicBehaviour() {
+        // === Listen for agent READY signals ===
+        addBehaviour(new jade.core.behaviours.CyclicBehaviour() {
             @Override
             public void action() {
-                MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.CFP);
-                ACLMessage msg = receive(mt);
+                MessageTemplate readyMt = MessageTemplate.MatchPerformative(ACLMessage.SUBSCRIBE);
+                ACLMessage readyMsg = receive(readyMt);
 
-                if (msg != null) {
-                    String content = msg.getContent();
-                    if (content != null && content.startsWith("DISTRESS_CALL:")) {
-                        handleDistressCall(msg);
-                    }
-                } else {
-                    block();
-                }
-            }
-        });
+                if (readyMsg != null) {
+                    String agentName = readyMsg.getSender().getLocalName();
+                    readyAgents.add(agentName);
+                    gui.addMessage("✅ " + agentName + " is READY");
 
-        // Listen for rescue bids (PROPOSE)
-        addBehaviour(new CyclicBehaviour() {
-            @Override
-            public void action() {
-                MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.PROPOSE);
-                ACLMessage msg = receive(mt);
+                    // When all agents ready, start the system
+                    if (readyAgents.size() == agentCount) {
+                        gui.addMessage("");
+                        gui.addMessage("🚀 All agents ready! System started.");
+                        gui.addMessage("");
 
-                if (msg != null) {
-                    String content = msg.getContent();
-                    if (content != null && content.startsWith("RESCUE_BID:")) {
-                        handleRescueBid(msg);
-                    }
-                } else {
-                    block();
-                }
-            }
-        });
-
-        // Listen for delivery completions and rescue completions
-        addBehaviour(new CyclicBehaviour() {
-            @Override
-            public void action() {
-                MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.INFORM);
-                ACLMessage msg = receive(mt);
-
-                if (msg != null) {
-                    String content = msg.getContent();
-                    String agentName = msg.getSender().getLocalName();
-
-                    if (content != null && content.startsWith("DELIVERY_COMPLETE:")) {
-                        String[] parts = content.split(":");
-                        if (parts.length >= 2) {
-                            String completedPackage = parts[1];
-
-                            PackageInfo pkgInfo = activePackages.get(completedPackage);
-                            if (pkgInfo != null) {
-                                String packageType = pkgInfo.packageType;
-                                gui.addMessage("✓ Package " + completedPackage + " delivered successfully by " + agentName);
-
-                                activePackages.remove(completedPackage);
-
-                                // CRITICAL FIX: Always create new package after delivery
-                                // Check if this was a rescue delivery
-                                if (agentOnRescueMission.getOrDefault(agentName, false)) {
-                                    // This agent was on rescue mission and just delivered the rescued package
-                                    // Create package for RESCUED agent's type (the original owner)
-                                    String rescuedAgentType = findRescuedAgentType(completedPackage);
-                                    if (rescuedAgentType != null) {
-                                        createNewPackage(rescuedAgentType);
-                                        gui.addMessage("📦 Created replacement package for rescued agent type: " + rescuedAgentType);
-                                    }
-                                    // Mark rescue mission as complete
-                                    agentOnRescueMission.put(agentName, false);
-                                } else {
-                                    // Normal delivery - create package for this agent's type
-                                    createNewPackage(packageType);
-                                }
-                            }
-                        }
-                    } else if (content != null && content.startsWith("RESCUE_COMPLETE:")) {
-                        String[] parts = content.split(":");
-                        if (parts.length >= 3) {
-                            String rescuedAgent = parts[1];
-                            String packageName = parts[2];
-
-                            gui.addMessage("✓ " + agentName + " successfully rescued " + rescuedAgent + " and took package " + packageName);
-
-                            agentStates.put(agentName, "DELIVERING");
-                            // Keep rescue flag true - will be cleared when delivery completes
+                        // Send START signal to all agents
+                        for (String agent : readyAgents) {
+                            ACLMessage startMsg = new ACLMessage(ACLMessage.INFORM);
+                            startMsg.setContent("START");
+                            startMsg.addReceiver(new AID(agent, AID.ISLOCALNAME));
+                            send(startMsg);
                         }
                     }
-                } else {
-                    block();
+                    return;
                 }
-            }
-        });
 
-        // Listen for package pickups
-        addBehaviour(new CyclicBehaviour() {
-            @Override
-            public void action() {
-                MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.CONFIRM);
-                ACLMessage msg = receive(mt);
+                // === Listen for package requests ===
+                MessageTemplate requestMt = MessageTemplate.MatchPerformative(ACLMessage.REQUEST);
+                ACLMessage requestMsg = receive(requestMt);
 
-                if (msg != null) {
-                    String pickedUpPkg = msg.getContent();
-                    String agentName = msg.getSender().getLocalName();
-
-                    PackageInfo pkgInfo = activePackages.get(pickedUpPkg);
-                    if (pkgInfo != null) {
-                        pkgInfo.available = false;
-                        pkgInfo.inDelivery = true;
-                        pkgInfo.assignedAgent = agentName;
-                        agentStates.put(agentName, "DELIVERING");
-
-                        gui.addMessage(agentName + " picked up " + pickedUpPkg);
-                        gui.removeMasterPackage(pickedUpPkg);
-                    }
-                } else {
-                    block();
+                if (requestMsg != null) {
+                    handlePackageRequest(requestMsg);
+                    return;
                 }
-            }
-        });
 
-        // Listen for agent refusals
-        addBehaviour(new CyclicBehaviour() {
-            @Override
-            public void action() {
-                MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.REFUSE);
-                ACLMessage msg = receive(mt);
-
-                if (msg != null) {
-                    String content = msg.getContent();
-                    String[] parts = content != null ? content.split(":") : new String[]{};
-
-                    if (parts.length > 0 && parts[0].equals("OVERLOADED")) {
-                        String refusedPkg = parts.length >= 2 ? parts[1] : "UNKNOWN";
-                        String agentName = msg.getSender().getLocalName();
-
-                        gui.addMessage("⚠️ " + agentName + " REFUSED " + refusedPkg + " due to overload");
-
-                        if (!"UNKNOWN".equals(refusedPkg)) {
-                            reassignPackage(refusedPkg, agentName);
-                        }
-                    }
-                } else {
-                    block();
+                // === Listen for package pickups (confirmation) ===
+                MessageTemplate pickupMt = MessageTemplate.MatchPerformative(ACLMessage.CONFIRM);
+                ACLMessage pickupMsg = receive(pickupMt);
+                if (pickupMsg != null) {
+                    handlePackagePickup(pickupMsg);
+                    return;
                 }
-            }
-        });
 
-        // Start initial assignment
-        addBehaviour(new OneShotBehaviour() {
-            @Override
-            public void action() {
-                try {
-                    Thread.sleep(2000);
+                // === Listen for delivery completions ===
+                MessageTemplate deliveredMt = MessageTemplate.MatchPerformative(ACLMessage.INFORM);
+                ACLMessage deliveredMsg = receive(deliveredMt);
 
-                    for (int i = 1; i <= 3; i++) {
-                        String agentName = "Agent" + i;
-                        String packageType = agentPackageMapping.get(agentName);
-
-                        assignNextAvailablePackage(agentName, packageType);
-                        Thread.sleep(500);
-                    }
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
+                if (deliveredMsg != null && deliveredMsg.getContent().startsWith("DELIVERED:")) {
+                    handleDeliveryComplete(deliveredMsg);
+                    return;
                 }
-            }
-        });
 
-        // Listen for agents requesting packages
-        addBehaviour(new CyclicBehaviour() {
-            @Override
-            public void action() {
-                MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.REQUEST);
-                ACLMessage msg = receive(mt);
-
-                if (msg != null) {
-                    String agentName = msg.getSender().getLocalName();
-                    String packageType = agentPackageMapping.get(agentName);
-
-                    // Check if agent was on rescue mission
-                    if (agentOnRescueMission.getOrDefault(agentName, false)) {
-                        // Agent completed rescue mission, now generate delayed package
-                        agentOnRescueMission.put(agentName, false);
-                        gui.addMessage("📦 Generating delayed package for " + agentName + " after rescue mission");
-                        createNewPackage(packageType);
-                    }
-
-                    // Assign next package
-                    assignNextAvailablePackage(agentName, packageType);
-                } else {
-                    block();
-                }
+                block();
             }
         });
     }
 
-    private void handleDistressCall(ACLMessage distressMsg) {
-        String content = distressMsg.getContent();
-        String[] parts = content.split(":");
-        String strandedAgent = parts[1];
-        String packageName = parts[2];
-        int distanceFromMaster = Integer.parseInt(parts[3]);
-        int remainingTime = Integer.parseInt(parts[4]);
-
-        gui.addMessage("🚨 DISTRESS CALL received from " + strandedAgent);
-        gui.addMessage("   → Package: " + packageName + ", Distance: " + distanceFromMaster + "s, Remaining: " + remainingTime + "s");
-        gui.addMessage("   → Awaiting bids from agents...");
-
-        // Store conversation ID for tracking bids
-        String conversationId = distressMsg.getConversationId();
-        rescueBids.put(conversationId, new ArrayList<>());
-
-        // Wait 3 seconds for bids to come in, then evaluate
-        addBehaviour(new WakerBehaviour(this, 3000) {
-            @Override
-            protected void onWake() {
-                evaluateRescueBids(conversationId, strandedAgent, packageName, distanceFromMaster, remainingTime);
-            }
-        });
+    private void createPackage(String name, int travelTime, int weight) {
+        PackageInfo pkg = new PackageInfo(name, travelTime, weight);
+        availablePackages.put(name, pkg);
+        gui.addMasterPackage(name, travelTime, weight);
     }
 
-    private void handleRescueBid(ACLMessage bidMsg) {
-        String content = bidMsg.getContent();
-        String[] parts = content.split(":");
-        // RESCUE_BID:StrandedAgent:Package:BidTime:BidderAgent
-        String strandedAgent = parts[1];
-        String packageName = parts[2];
-        int bidTime = Integer.parseInt(parts[3]);
-        String bidderAgent = parts[4];
-        String conversationId = bidMsg.getConversationId();
-
-        gui.addMessage("   📊 Bid received: " + bidderAgent + " can rescue in " + bidTime + "s");
-
-        // Store the bid
-        List<RescueBid> bids = rescueBids.get(conversationId);
-        if (bids != null) {
-            bids.add(new RescueBid(bidderAgent, strandedAgent, packageName, bidTime, conversationId));
-        }
-    }
-
-    private void evaluateRescueBids(String conversationId, String strandedAgent, String packageName,
-                                    int distanceFromMaster, int remainingTime) {
-        List<RescueBid> bids = rescueBids.get(conversationId);
-
-        if (bids == null || bids.isEmpty()) {
-            gui.addMessage("⚠️ No bids received for rescue of " + strandedAgent + ". Waiting...");
+    private void handlePackageRequest(ACLMessage msg) {
+        // Don't process requests when paused
+        if (systemPaused) {
             return;
         }
 
-        gui.addMessage("🔍 Evaluating " + bids.size() + " bids for rescue mission:");
+        String agentName = msg.getSender().getLocalName();
+        String content = msg.getContent();
 
-        // Find best bid (lowest time)
-        RescueBid bestBid = null;
-        for (RescueBid bid : bids) {
-            gui.addMessage("   → " + bid.agentName + ": " + bid.bidTime + "s");
-            if (bestBid == null || bid.bidTime < bestBid.bidTime) {
-                bestBid = bid;
+        // Format: "REQUEST:currentLoad:capacity"
+        String[] parts = content.split(":");
+        int currentLoad = Integer.parseInt(parts[1]);
+        int capacity = Integer.parseInt(parts[2]);
+        ACLMessage reply = msg.createReply();
+
+        // Find first available package that fits capacity
+        String selectedPackage = null;
+        PackageInfo selectedInfo = null;
+
+        synchronized (availablePackages) {
+            for (Map.Entry<String, PackageInfo> entry : availablePackages.entrySet()) {
+                PackageInfo pkg = entry.getValue();
+                if (currentLoad + pkg.weight <= capacity) {
+                    selectedPackage = entry.getKey();
+                    selectedInfo = pkg;
+                    break;
+                }
             }
-        }
+            if (selectedPackage != null) {
+                // IMMEDIATELY remove package from available list to prevent double-assignment
+                availablePackages.remove(selectedPackage);
 
-        if (bestBid != null) {
-            gui.addMessage("🏆 WINNER: " + bestBid.agentName + " wins with bid of " + bestBid.bidTime + "s");
-            gui.addMessage("   → Awarding rescue mission to " + bestBid.agentName);
+                // Package found - send it to agent
+                reply.setPerformative(ACLMessage.PROPOSE);
+                reply.setContent(selectedPackage + ":" + selectedInfo.travelTime + ":" + selectedInfo.weight);
+                send(reply);
 
-            // Mark agent as on rescue mission
-            agentOnRescueMission.put(bestBid.agentName, true);
+                gui.addMessage("📤 " + agentName + " offered " + selectedPackage +
+                        " (" + selectedInfo.travelTime + "s, " + selectedInfo.weight + "kg)");
 
-            // Calculate actual travel time (use a portion of the distance)
-            int travelTime = 1 + (int) (Math.random() * distanceFromMaster);
-
-            // Award the rescue mission
-            ACLMessage award = new ACLMessage(ACLMessage.INFORM);
-            award.setContent("RESCUE_AWARDED:" + strandedAgent + ":" + packageName + ":" +
-                    travelTime + ":" + remainingTime);
-            award.addReceiver(new AID(bestBid.agentName, AID.ISLOCALNAME));
-            send(award);
-
-            agentStates.put(bestBid.agentName, "RESCUE_MISSION");
-        }
-
-        // Clean up bids
-        rescueBids.remove(conversationId);
-    }
-
-    private void createNewPackage(String packageType) {
-        int counter = packageCounters.getOrDefault(packageType, 1);
-        String packageName = packageType + "." + counter;
-        int deliveryTime = 10 + (int) (Math.random() * 7);
-
-        PackageInfo pkgInfo = new PackageInfo(packageName, packageType, deliveryTime);
-        activePackages.put(packageName, pkgInfo);
-
-        Queue<String> q = packageQueues.get(packageType);
-        if (q != null) q.offer(packageName);
-
-        gui.addMasterPackage(packageName, deliveryTime);
-        gui.addMessage("📦 New package created: " + packageName + " (" + deliveryTime + "s) [Counter: " + counter + ", Queued]");
-
-        packageCounters.put(packageType, counter + 1);
-        notifyWaitingAgent(packageType);
-    }
-
-    private void notifyWaitingAgent(String packageType) {
-        for (Map.Entry<String, String> entry : agentPackageMapping.entrySet()) {
-            String agentName = entry.getKey();
-            String agentPkgType = entry.getValue();
-
-            if (agentPkgType.equals(packageType) && agentStates.get(agentName).equals("WAITING")) {
-                assignNextAvailablePackage(agentName, packageType);
-                break;
-            }
-        }
-    }
-
-    private void assignNextAvailablePackage(String agentName, String packageType) {
-        Queue<String> queue = packageQueues.get(packageType);
-        if (queue != null && !queue.isEmpty()) {
-            String packageName = queue.poll();
-            PackageInfo pkgInfo = activePackages.get(packageName);
-
-            if (pkgInfo != null && pkgInfo.available) {
-                ACLMessage msg = new ACLMessage(ACLMessage.INFORM);
-                msg.setContent(packageName + ":" + pkgInfo.deliveryTime);
-                msg.addReceiver(new AID(agentName, AID.ISLOCALNAME));
-                send(msg);
-
-                gui.addMessage("Assigned " + packageName + " (" + pkgInfo.deliveryTime + "s) to " + agentName + " [From Queue]");
-                agentStates.put(agentName, "ASSIGNED");
+                // Remove from GUI
+                gui.removeMasterPackage(selectedPackage);
             } else {
-                gui.addMessage(agentName + " waiting for new " + packageType + ".X package...");
-                agentStates.put(agentName, "WAITING");
+                // No suitable package available
+                reply.setPerformative(ACLMessage.REFUSE);
+
+                if (availablePackages.isEmpty()) {
+                    reply.setContent("NO_PACKAGES");
+                    gui.addMessage("⚠️ " + agentName + " requested package but none available");
+                } else {
+                    reply.setContent("OVERWEIGHT");
+                    gui.addMessage("⚠️ " + agentName + " CAPACITY CONFLICT - all packages too heavy [" +
+                            currentLoad + "/" + capacity + "kg]");
+                    gui.incrementConflictCount();
+                }
+                send(reply);
             }
-        } else {
-            gui.addMessage(agentName + " waiting for new " + packageType + ".X package...");
-            agentStates.put(agentName, "WAITING");
         }
     }
 
-    private void reassignPackage(String pkg, String excludeAgent) {
-        for (Map.Entry<String, String> entry : agentStates.entrySet()) {
-            String agent = entry.getKey();
-            String state = entry.getValue();
+    private void handlePackagePickup(ACLMessage msg) {
+        String packageName = msg.getContent();
+        String agentName = msg.getSender().getLocalName();
 
-            if (agent.equals(excludeAgent)) continue;
+        // Package was already removed when offered, just log the confirmation
+        gui.addMessage("✅ " + agentName + " confirmed pickup of " + packageName);
 
-            if (state.equals("IDLE") || state.equals("WAITING")) {
-                PackageInfo pkgInfo = activePackages.get(pkg);
-                if (pkgInfo != null) {
-                    ACLMessage msg = new ACLMessage(ACLMessage.INFORM);
-                    msg.setContent(pkg + ":" + pkgInfo.deliveryTime);
-                    msg.addReceiver(new AID(agent, AID.ISLOCALNAME));
-                    send(msg);
+        // Show remaining packages
+        synchronized (availablePackages) {
+            if (availablePackages.isEmpty()) {
+                gui.addMessage("📦No packages remaining");
+            } else {
+                gui.addMessage("📦Remaining: " + availablePackages.keySet());
+            }
+        }
+    }
 
-                    gui.addMessage("📦 Reassigned " + pkg + " to " + agent);
-                    agentStates.put(agent, "ASSIGNED");
+    private void handleDeliveryComplete(ACLMessage msg) {
+        String content = msg.getContent();
+        String packageName = content.substring("DELIVERED:".length());
+        String agentName = msg.getSender().getLocalName();
+
+        gui.addMessage("🎉 " + agentName + " completed delivery of " + packageName);
+        gui.incrementDeliveryCount();
+
+        // Don't create new packages when paused
+        if (systemPaused) {
+            return;
+        }
+
+        // Create new packages to keep the system running (create 2 packages per delivery)
+        synchronized (availablePackages) {
+            for (int i = 0; i < 2; i++) {
+                int pkgNum = (int) (Math.random() * 1000);
+                String newPkgName = "P" + pkgNum;
+                int travelTime = 2 + (int) (Math.random() * 5); // 2-6s
+                int weight = 3 + (int) (Math.random() * 7); // 3-9kg
+
+                createPackage(newPkgName, travelTime, weight);
+            }
+            gui.addMessage("📦 Created 2 new packages (total available: " + availablePackages.size() + ")");
+        }
+    }
+
+    private void pauseSystem() {
+        systemPaused = true;
+
+        // Send PAUSE message to all agents
+        for (String agentName : readyAgents) {
+            ACLMessage pauseMsg = new ACLMessage(ACLMessage.INFORM);
+            pauseMsg.setContent("PAUSE");
+            pauseMsg.addReceiver(new AID(agentName, AID.ISLOCALNAME));
+            send(pauseMsg);
+        }
+    }
+
+    private void resumeSystem() {
+        systemPaused = false;
+        gui.addMessage("▶️ System creating new packages after resume...");
+        // Create some new packages when resuming if needed
+        synchronized (availablePackages) {
+            if (availablePackages.size() < 5) {
+                for (int i = 0; i < 5; i++) {
+                    int pkgNum = (int) (Math.random() * 1000);
+                    String newPkgName = "P" + pkgNum;
+                    int travelTime = 2 + (int) (Math.random() * 5); // 2-6s
+                    int weight = 3 + (int) (Math.random() * 7); // 3-9kg
+
+                    createPackage(newPkgName, travelTime, weight);
                 }
-                return;
+                gui.addMessage("📦 Created 5 new packages for resumed operations");
             }
         }
 
-        gui.addMessage("⚠️ No idle agents available for reassignment of " + pkg);
-    }
-
-    // Helper method to find the original package type from package name
-    private String findRescuedAgentType(String packageName) {
-        // Extract the type from package name (e.g., "1.1" -> "1")
-        if (packageName != null && packageName.contains(".")) {
-            return packageName.split("\\.")[0];
+        // Send RESUME message to all agents
+        for (String agentName : readyAgents) {
+            ACLMessage resumeMsg = new ACLMessage(ACLMessage.INFORM);
+            resumeMsg.setContent("RESUME");
+            resumeMsg.addReceiver(new AID(agentName, AID.ISLOCALNAME));
+            send(resumeMsg);
         }
-        return null;
     }
+    static class PackageInfo {
+        String name;
+        int travelTime;
+        int weight;
 
-    private void connectGUIButtons() {
-        for (String agentName : agentPackageMapping.keySet()) {
-            JButton[] buttons = gui.getAgentButtons(agentName);
-            if (buttons != null && buttons.length >= 2) {
-                JButton triggerButton = buttons[0];
-                JButton recoverButton = buttons[1];
-
-                // Remove old listeners
-                for (ActionListener al : triggerButton.getActionListeners()) {
-                    triggerButton.removeActionListener(al);
-                }
-                for (ActionListener al : recoverButton.getActionListeners()) {
-                    recoverButton.removeActionListener(al);
-                }
-
-                // Hide/disable the second button (no longer needed)
-                recoverButton.setVisible(false);
-
-                final String agentNameFinal = agentName;
-                triggerButton.addActionListener(e -> {
-                    ACLMessage failureMsg = new ACLMessage(ACLMessage.REQUEST);
-                    failureMsg.setContent("TRIGGER_FAILURE");
-                    failureMsg.addReceiver(new AID(agentNameFinal, AID.ISLOCALNAME));
-                    send(failureMsg);
-
-                    gui.addMessage("💥 Manual failure triggered for " + agentNameFinal);
-                });
-            }
+        PackageInfo(String name, int travelTime, int weight) {
+            this.name = name;
+            this.travelTime = travelTime;
+            this.weight = weight;
         }
-        gui.addMessage("✅ GUI buttons connected to agents");
     }
 }

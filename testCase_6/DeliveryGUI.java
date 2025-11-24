@@ -8,100 +8,118 @@ public class DeliveryGUI extends JFrame {
     private JPanel masterPanel;
     private JPanel agentsPanel;
     private JTextArea logArea;
-    private Map<String, JLabel[]> agentLabels = new HashMap<>();
-    private Map<String, JButton[]> agentButtons = new HashMap<>();
+    private Map<String, AgentDisplay> agentDisplays = new HashMap<>();
     private JPanel masterBoxesPanel;
     private Map<String, JPanel> packagePanels = new HashMap<>();
+    private Runnable onPauseCallback;
+    private Runnable onResumeCallback;
+    private boolean isPaused = false;
+    private boolean autoScroll = true;
+
+    // Statistics
+    private int totalDeliveries = 0;
+    private int totalConflicts = 0;
+    private JLabel statsLabel;
 
     public DeliveryGUI() {
-        setTitle("Delivery System Monitor - Multi-Agent Collaboration");
-        setSize(1100, 650);
+        setTitle("Delivery System - Capacity Conflict Simulation");
+        setSize(1000, 600);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLayout(new BorderLayout(10, 10));
 
         // === Master Panel ===
         masterPanel = new JPanel(new BorderLayout(10, 10));
-        masterPanel.setBorder(BorderFactory.createTitledBorder("Master Agent - Available Packages"));
-        masterPanel.setPreferredSize(new Dimension(200, 0));
+        masterPanel.setBorder(BorderFactory.createTitledBorder("📦 Master Agent - Available Packages"));
+        masterPanel.setPreferredSize(new Dimension(220, 0));
 
         masterBoxesPanel = new JPanel();
         masterBoxesPanel.setLayout(new BoxLayout(masterBoxesPanel, BoxLayout.Y_AXIS));
         JScrollPane masterScroll = new JScrollPane(masterBoxesPanel);
         masterPanel.add(masterScroll, BorderLayout.CENTER);
 
+        // Add control panel at the bottom of master panel
+        JPanel controlPanel = new JPanel(new GridLayout(3, 1, 5, 5));
+        controlPanel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+
+        JButton pauseButton = new JButton("⏸️ PAUSE");
+        pauseButton.setFont(new Font("Arial", Font.BOLD, 12));
+        pauseButton.setBackground(new Color(255, 165, 0));
+        pauseButton.setForeground(Color.WHITE);
+        pauseButton.setFocusPainted(false);
+        pauseButton.addActionListener(e -> {
+            if (isPaused) {
+                resumeSystem();
+                pauseButton.setText("⏸️ PAUSE");
+                pauseButton.setBackground(new Color(255, 165, 0));
+            } else {
+                pauseSystem();
+                pauseButton.setText("▶️ RESUME");
+                pauseButton.setBackground(new Color(50, 150, 50));
+            }
+        });
+        JButton clearLogButton = new JButton("🗑️ CLEAR LOG");
+        clearLogButton.setFont(new Font("Arial", Font.BOLD, 12));
+        clearLogButton.setBackground(new Color(100, 100, 200));
+        clearLogButton.setForeground(Color.WHITE);
+        clearLogButton.setFocusPainted(false);
+        clearLogButton.addActionListener(e -> clearLog());
+
+        JCheckBox autoScrollCheck = new JCheckBox("Auto-scroll", true);
+        autoScrollCheck.setFont(new Font("Arial", Font.BOLD, 11));
+        autoScrollCheck.addActionListener(e -> autoScroll = autoScrollCheck.isSelected());
+
+        controlPanel.add(pauseButton);
+        controlPanel.add(clearLogButton);
+        controlPanel.add(autoScrollCheck);
+
+        masterPanel.add(controlPanel, BorderLayout.SOUTH);
+
         add(masterPanel, BorderLayout.WEST);
 
         // === Agents Panel ===
         agentsPanel = new JPanel(new GridLayout(1, 3, 10, 10));
-        agentsPanel.setBorder(BorderFactory.createTitledBorder("Delivery Agents - Live Status"));
+        agentsPanel.setBorder(BorderFactory.createTitledBorder("🚚 Delivery Agents - Live Status"));
         add(agentsPanel, BorderLayout.CENTER);
 
         // === Log Area ===
+        JPanel logPanel = new JPanel(new BorderLayout());
+
+        // Statistics bar at top of log
+        statsLabel = new JLabel("📊 Deliveries: 0 | Conflicts: 0 | Status: Running");
+        statsLabel.setFont(new Font("Arial", Font.BOLD, 12));
+        statsLabel.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(Color.GRAY, 1),
+                BorderFactory.createEmptyBorder(5, 10, 5, 10)
+        ));
+        statsLabel.setOpaque(true);
+        statsLabel.setBackground(new Color(230, 240, 255));
+        logPanel.add(statsLabel, BorderLayout.NORTH);
+
         logArea = new JTextArea(10, 50);
         logArea.setEditable(false);
         logArea.setFont(new Font("Monospaced", Font.PLAIN, 11));
         JScrollPane logScroll = new JScrollPane(logArea);
-        logScroll.setBorder(BorderFactory.createTitledBorder("System Messages & Events"));
-        add(logScroll, BorderLayout.SOUTH);
+        logScroll.setBorder(BorderFactory.createTitledBorder("📋 System Messages"));
+        logPanel.add(logScroll, BorderLayout.CENTER);
 
-        // === Control Panel ===
-        JPanel controlPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 20, 10));
-        controlPanel.setBorder(BorderFactory.createTitledBorder("System Controls"));
-
-        JButton pauseButton = new JButton("⏸️ PAUSE SYSTEM");
-        pauseButton.setBackground(new Color(255, 200, 100));
-        pauseButton.setForeground(Color.BLACK);
-        pauseButton.setFont(new Font("Arial", Font.BOLD, 14));
-        pauseButton.setFocusPainted(false);
-        pauseButton.setPreferredSize(new Dimension(180, 40));
-
-        JButton resumeButton = new JButton("▶️ RESUME SYSTEM");
-        resumeButton.setBackground(new Color(100, 200, 100));
-        resumeButton.setForeground(Color.WHITE);
-        resumeButton.setFont(new Font("Arial", Font.BOLD, 14));
-        resumeButton.setFocusPainted(false);
-        resumeButton.setPreferredSize(new Dimension(180, 40));
-        resumeButton.setEnabled(false);
-
-        pauseButton.addActionListener(e -> {
-            systemPaused = true;
-            pauseButton.setEnabled(false);
-            resumeButton.setEnabled(true);
-            addMessage("⏸️ ========== SYSTEM PAUSED ==========");
-        });
-
-        resumeButton.addActionListener(e -> {
-            systemPaused = false;
-            resumeButton.setEnabled(false);
-            pauseButton.setEnabled(true);
-            addMessage("▶️ ========== SYSTEM RESUMED ==========");
-        });
-
-        controlPanel.add(pauseButton);
-        controlPanel.add(resumeButton);
-
-        add(controlPanel, BorderLayout.NORTH);
+        add(logPanel, BorderLayout.SOUTH);
 
         setVisible(true);
     }
 
-    private boolean systemPaused = false;
-
-    public boolean isSystemPaused() {
-        return systemPaused;
-    }
-
-    public void addMasterPackage(String packageName, int deliveryTime) {
+    public void addMasterPackage(String packageName, int travelTime, int weight) {
         SwingUtilities.invokeLater(() -> {
             JPanel pkgPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-            pkgPanel.setMaximumSize(new Dimension(180, 40));
-            pkgPanel.setBorder(BorderFactory.createLineBorder(Color.LIGHT_GRAY, 1));
+            pkgPanel.setMaximumSize(new Dimension(200, 45));
+            pkgPanel.setBorder(BorderFactory.createLineBorder(new Color(100, 150, 255), 2));
+            pkgPanel.setBackground(new Color(240, 245, 255));
 
             JLabel boxIcon = new JLabel("📦");
             boxIcon.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 20));
 
-            JLabel pkgLabel = new JLabel(" " + packageName + ": " + deliveryTime + "s");
-            pkgLabel.setFont(new Font("Arial", Font.BOLD, 12));
+            JLabel pkgLabel = new JLabel("<html>" + packageName + "<br>" +
+                    travelTime + "s, " + weight + "kg</html>");
+            pkgLabel.setFont(new Font("Arial", Font.BOLD, 11));
 
             pkgPanel.add(boxIcon);
             pkgPanel.add(pkgLabel);
@@ -127,195 +145,231 @@ public class DeliveryGUI extends JFrame {
         });
     }
 
-    public void addAgent(String agentName) {
+    public void addAgent(String agentName, int capacity) {
         JPanel agentPanel = new JPanel();
         agentPanel.setLayout(new BoxLayout(agentPanel, BoxLayout.Y_AXIS));
-        agentPanel.setBorder(BorderFactory.createTitledBorder(agentName));
+        agentPanel.setBorder(BorderFactory.createTitledBorder("🚚 " + agentName));
 
-        JLabel currentPkgLabel = new JLabel("Package: None", SwingConstants.CENTER);
-        JLabel timeToMasterLabel = new JLabel("Time to Master: 0s", SwingConstants.CENTER);
-        JLabel deliveryTimeLabel = new JLabel("Delivery Time: 0s", SwingConstants.CENTER);
-        JLabel consecutiveLabel = new JLabel("Consecutive: 0", SwingConstants.CENTER);
         JLabel statusLabel = new JLabel("Status: Idle", SwingConstants.CENTER);
+        JLabel loadLabel = new JLabel("Load: 0/" + capacity + "kg", SwingConstants.CENTER);
+        JLabel packagesLabel = new JLabel("Packages: None", SwingConstants.CENTER);
+        JLabel travelTimeLabel = new JLabel("Travel Time: 0s", SwingConstants.CENTER);
 
-        // Style labels
-        currentPkgLabel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(Color.GRAY, 1),
-                BorderFactory.createEmptyBorder(8, 5, 8, 5)
-        ));
-        currentPkgLabel.setOpaque(true);
-        currentPkgLabel.setBackground(new Color(240, 248, 255));
-        currentPkgLabel.setFont(new Font("Arial", Font.BOLD, 12));
+        styleLabel(statusLabel, new Color(128, 128, 128));
+        styleLabel(loadLabel, new Color(200, 200, 200));
+        styleLabel(packagesLabel, new Color(240, 248, 255));
+        styleLabel(travelTimeLabel, new Color(255, 250, 240));
 
-        timeToMasterLabel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(Color.GRAY, 1),
-                BorderFactory.createEmptyBorder(8, 5, 8, 5)
-        ));
-        timeToMasterLabel.setOpaque(true);
-        timeToMasterLabel.setBackground(Color.WHITE);
+        packagesLabel.setFont(new Font("Arial", Font.BOLD, 11));
+        loadLabel.setFont(new Font("Arial", Font.BOLD, 12));
 
-        deliveryTimeLabel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(Color.GRAY, 1),
-                BorderFactory.createEmptyBorder(8, 5, 8, 5)
-        ));
-        deliveryTimeLabel.setOpaque(true);
-        deliveryTimeLabel.setBackground(Color.WHITE);
-
-        consecutiveLabel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(Color.GRAY, 1),
-                BorderFactory.createEmptyBorder(8, 5, 8, 5)
-        ));
-        consecutiveLabel.setOpaque(true);
-        consecutiveLabel.setBackground(new Color(255, 250, 205));
-        consecutiveLabel.setFont(new Font("Arial", Font.BOLD, 11));
-
-        statusLabel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(Color.GRAY, 1),
-                BorderFactory.createEmptyBorder(8, 5, 8, 5)
-        ));
-        statusLabel.setOpaque(true);
-        statusLabel.setBackground(new Color(200, 200, 200));
-        statusLabel.setFont(new Font("Arial", Font.BOLD, 12));
-
-        // Control button - only one now
-        JButton triggerButton = new JButton("💥 Trigger Failure");
-        triggerButton.setBackground(new Color(255, 100, 100));
-        triggerButton.setForeground(Color.WHITE);
-        triggerButton.setFocusPainted(false);
-        triggerButton.setFont(new Font("Arial", Font.BOLD, 10));
-
-        JButton dummyButton = new JButton(); // Placeholder for array compatibility
-        dummyButton.setVisible(false);
-
-        JPanel buttonPanel = new JPanel(new GridLayout(1, 1, 5, 5));
-        buttonPanel.add(triggerButton);
-
-        agentPanel.add(currentPkgLabel);
-        agentPanel.add(Box.createRigidArea(new Dimension(0, 5)));
-        agentPanel.add(timeToMasterLabel);
-        agentPanel.add(Box.createRigidArea(new Dimension(0, 5)));
-        agentPanel.add(deliveryTimeLabel);
-        agentPanel.add(Box.createRigidArea(new Dimension(0, 5)));
-        agentPanel.add(consecutiveLabel);
-        agentPanel.add(Box.createRigidArea(new Dimension(0, 5)));
         agentPanel.add(statusLabel);
-        agentPanel.add(Box.createRigidArea(new Dimension(0, 8)));
-        agentPanel.add(buttonPanel);
+        agentPanel.add(Box.createRigidArea(new Dimension(0, 5)));
+        agentPanel.add(loadLabel);
+        agentPanel.add(Box.createRigidArea(new Dimension(0, 5)));
+        agentPanel.add(packagesLabel);
+        agentPanel.add(Box.createRigidArea(new Dimension(0, 5)));
+        agentPanel.add(travelTimeLabel);
 
         agentsPanel.add(agentPanel);
         agentsPanel.revalidate();
         agentsPanel.repaint();
 
-        agentLabels.put(agentName, new JLabel[]{timeToMasterLabel, deliveryTimeLabel, statusLabel, currentPkgLabel, consecutiveLabel});
-        agentButtons.put(agentName, new JButton[]{triggerButton, dummyButton});
-
-        // Connect buttons to agents after 2 seconds (wait for JADE agents to be created)
-        Timer connectionTimer = new Timer(2000, e -> {
-            connectButtonsToAgent(agentName, triggerButton);
-            ((Timer)e.getSource()).stop();
-        });
-        connectionTimer.start();
+        AgentDisplay display = new AgentDisplay(statusLabel, loadLabel, packagesLabel, travelTimeLabel, capacity);
+        agentDisplays.put(agentName, display);
     }
 
-    private void connectButtonsToAgent(String agentName, JButton triggerButton) {
-        // This method will be called to connect buttons to actual agent behavior
-        // We'll implement this through MasterAgent
-        triggerButton.addActionListener(e -> {
-            if (MasterAgent.gui != null) {
-                triggerAgentFailure(agentName);
-            }
-        });
-    }
-
-    public void triggerAgentFailure(String agentName) {
-        addMessage("💥 Manual failure trigger requested for " + agentName);
-        // This will be called from MasterAgent to trigger failure
-    }
-
-    public void updateAgentTimes(String agentName, int timeToMaster, int deliveryTime) {
-        SwingUtilities.invokeLater(() -> {
-            JLabel[] labels = agentLabels.get(agentName);
-            if (labels != null) {
-                labels[0].setText("Time to Master: " + timeToMaster + "s");
-                labels[1].setText("Delivery Time: " + deliveryTime + "s");
-
-                if (timeToMaster > 0) {
-                    labels[2].setText("Status: Returning to Master");
-                    labels[2].setForeground(Color.WHITE);
-                    labels[2].setBackground(new Color(255, 140, 0)); // Orange
-                } else if (deliveryTime > 0) {
-                    labels[2].setText("Status: Delivering");
-                    labels[2].setForeground(Color.WHITE);
-                    labels[2].setBackground(new Color(30, 144, 255)); // Blue
-                } else {
-                    labels[2].setText("Status: Idle (At Master)");
-                    labels[2].setForeground(Color.WHITE);
-                    labels[2].setBackground(new Color(128, 128, 128)); // Gray
-                }
-            }
-        });
-    }
-
-    public void updateAgentPackage(String agentName, String packageName) {
-        SwingUtilities.invokeLater(() -> {
-            JLabel[] labels = agentLabels.get(agentName);
-            if (labels != null) {
-                if (packageName != null && !packageName.isEmpty()) {
-                    labels[3].setText("Package: " + packageName);
-                    labels[3].setForeground(new Color(0, 100, 0));
-                } else {
-                    labels[3].setText("Package: None");
-                    labels[3].setForeground(Color.GRAY);
-                }
-            }
-        });
-    }
-
-    public void updateConsecutiveDeliveries(String agentName, int count) {
-        SwingUtilities.invokeLater(() -> {
-            JLabel[] labels = agentLabels.get(agentName);
-            if (labels != null && labels.length > 4) {
-                labels[4].setText("Consecutive: " + count);
-                if (count >= 3) {
-                    labels[4].setBackground(new Color(255, 200, 200));
-                    labels[4].setForeground(new Color(150, 0, 0));
-                } else {
-                    labels[4].setBackground(new Color(255, 250, 205));
-                    labels[4].setForeground(Color.BLACK);
-                }
-            }
-        });
+    private void styleLabel(JLabel label, Color bgColor) {
+        label.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(Color.GRAY, 1),
+                BorderFactory.createEmptyBorder(8, 5, 8, 5)
+        ));
+        label.setOpaque(true);
+        label.setBackground(bgColor);
     }
 
     public void updateAgentStatus(String agentName, String status) {
         SwingUtilities.invokeLater(() -> {
-            JLabel[] labels = agentLabels.get(agentName);
-            if (labels != null) {
-                labels[2].setText("Status: " + status);
+            AgentDisplay display = agentDisplays.get(agentName);
+            if (display != null) {
+                display.statusLabel.setText("Status: " + status);
 
-                // Update color based on status
-                if (status.contains("STRANDED") || status.contains("FAILED")) {
-                    labels[2].setBackground(new Color(200, 0, 0));
-                    labels[2].setForeground(Color.WHITE);
-                } else if (status.contains("Rescue")) {
-                    labels[2].setBackground(new Color(255, 165, 0));
-                    labels[2].setForeground(Color.WHITE);
-                } else if (status.contains("Overloaded")) {
-                    labels[2].setBackground(new Color(255, 100, 100));
-                    labels[2].setForeground(Color.WHITE);
+                switch (status) {
+                    case "AT_MASTER":
+                        display.statusLabel.setBackground(new Color(128, 128, 128));
+                        display.statusLabel.setForeground(Color.WHITE);
+                        break;
+                    case "DELIVERING":
+                        display.statusLabel.setBackground(new Color(30, 144, 255));
+                        display.statusLabel.setForeground(Color.WHITE);
+                        break;
+                    case "RETURNING":
+                        display.statusLabel.setBackground(new Color(255, 140, 0));
+                        display.statusLabel.setForeground(Color.WHITE);
+                        break;
+                    case "STOPPED":
+                        display.statusLabel.setBackground(new Color(100, 100, 100));
+                        display.statusLabel.setForeground(Color.WHITE);
+                        break;
+                    default:
+                        display.statusLabel.setBackground(new Color(200, 200, 200));
+                        display.statusLabel.setForeground(Color.BLACK);
                 }
             }
         });
     }
 
-    public JButton[] getAgentButtons(String agentName) {
-        return agentButtons.get(agentName);
+    public void updateAgentLoad(String agentName, int currentLoad, int capacity) {
+        SwingUtilities.invokeLater(() -> {
+            AgentDisplay display = agentDisplays.get(agentName);
+            if (display != null) {
+                display.loadLabel.setText("Load: " + currentLoad + "/" + capacity + "kg");
+
+                // Color based on load percentage
+                float percentage = (float) currentLoad / capacity;
+                if (percentage >= 1.0f) {
+                    display.loadLabel.setBackground(new Color(255, 200, 100)); // Orange - high
+                } else if (percentage >= 0.7f) {
+                    display.loadLabel.setBackground(new Color(255, 200, 100)); // Orange - high
+                } else if (percentage > 0) {
+                    display.loadLabel.setBackground(new Color(144, 238, 144)); // Green - partial
+                } else {
+                    display.loadLabel.setBackground(new Color(200, 200, 200)); // Gray - empty
+                }
+            }
+        });
+    }
+
+    public void updateAgentPackages(String agentName, String packages) {
+        SwingUtilities.invokeLater(() -> {
+            AgentDisplay display = agentDisplays.get(agentName);
+            if (display != null) {
+                display.packagesLabel.setText("Packages: " + packages);
+
+                if ("None".equals(packages)) {
+                    display.packagesLabel.setForeground(Color.GRAY);
+                } else {
+                    display.packagesLabel.setForeground(new Color(0, 100, 0));
+                }
+            }
+        });
+    }
+
+    public void updateAgentTravelTime(String agentName, int timeLeft) {
+        SwingUtilities.invokeLater(() -> {
+            AgentDisplay display = agentDisplays.get(agentName);
+            if (display != null) {
+                display.travelTimeLabel.setText("Travel Time: " + timeLeft + "s");
+
+                if (timeLeft > 0) {
+                    display.travelTimeLabel.setForeground(new Color(255, 100, 0));
+                    display.travelTimeLabel.setFont(new Font("Arial", Font.BOLD, 12));
+                } else {
+                    display.travelTimeLabel.setForeground(Color.GRAY);
+                    display.travelTimeLabel.setFont(new Font("Arial", Font.PLAIN, 11));
+                }
+            }
+        });
     }
 
     public void addMessage(String msg) {
         SwingUtilities.invokeLater(() -> {
             logArea.append(msg + "\n");
-            logArea.setCaretPosition(logArea.getDocument().getLength());
+
+            // Track statistics
+            if (msg.contains("completed delivery") || msg.contains("delivered successfully")) {
+                totalDeliveries++;
+                updateStats();
+            }
+            if (msg.contains("CAPACITY CONFLICT") || msg.contains("CONFLICT")) {
+                totalConflicts++;
+                updateStats();
+            }
+
+            // Auto-scroll if enabled
+            if (autoScroll) {
+                logArea.setCaretPosition(logArea.getDocument().getLength());
+            }
         });
+    }
+
+    private void updateStats() {
+        String status = isPaused ? "PAUSED" : "Running";
+        statsLabel.setText("📊 Deliveries: " + totalDeliveries +
+                " | Conflicts: " + totalConflicts +
+                " | Status: " + status);
+
+        if (isPaused) {
+            statsLabel.setBackground(new Color(255, 230, 200));
+        } else {
+            statsLabel.setBackground(new Color(230, 240, 255));
+        }
+    }
+
+    private void clearLog() {
+        logArea.setText("");
+        addMessage("🗑️ Log cleared at delivery #" + totalDeliveries);
+        addMessage("📊 Statistics: " + totalDeliveries + " deliveries, " + totalConflicts + " conflicts so far");
+        addMessage("");
+    }
+
+    private void pauseSystem() {
+        isPaused = true;
+        addMessage("\n⏸️ SYSTEM PAUSED - Review the logs above");
+        addMessage("Click RESUME to continue operations\n");
+        updateStats();
+
+        if (onPauseCallback != null) {
+            onPauseCallback.run();
+        }
+    }
+
+    private void resumeSystem() {
+        isPaused = false;
+        addMessage("\n▶️ SYSTEM RESUMED\n");
+        updateStats();
+
+        if (onResumeCallback != null) {
+            onResumeCallback.run();
+        }
+    }
+
+    public void setOnPauseCallback(Runnable callback) {
+        this.onPauseCallback = callback;
+    }
+
+    public void setOnResumeCallback(Runnable callback) {
+        this.onResumeCallback = callback;
+    }
+
+    public boolean isPaused() {
+        return isPaused;
+    }
+
+    public void incrementDeliveryCount() {
+        totalDeliveries++;
+        updateStats();
+    }
+
+    public void incrementConflictCount() {
+        totalConflicts++;
+        updateStats();
+    }
+
+    static class AgentDisplay {
+        JLabel statusLabel;
+        JLabel loadLabel;
+        JLabel packagesLabel;
+        JLabel travelTimeLabel;
+        int capacity;
+
+        AgentDisplay(JLabel statusLabel, JLabel loadLabel, JLabel packagesLabel,
+                     JLabel travelTimeLabel, int capacity) {
+            this.statusLabel = statusLabel;
+            this.loadLabel = loadLabel;
+            this.packagesLabel = packagesLabel;
+            this.travelTimeLabel = travelTimeLabel;
+            this.capacity = capacity;
+        }
     }
 }
